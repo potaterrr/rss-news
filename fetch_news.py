@@ -4,8 +4,6 @@ import os
 import json
 import logging
 import random
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
 
 # --- LOGGING CONFIGURATION ---
 logging.basicConfig(
@@ -19,10 +17,8 @@ logging.basicConfig(
 
 # --- CONFIGURATION ---
 WEBHOOK_URL = os.getenv("MAKE_WEBHOOK_URL")
-GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")
-GDRIVE_SERVICE_ACCOUNT_JSON = os.getenv("GDRIVE_SERVICE_ACCOUNT_JSON")
 
-# Fallback image if Drive folder is empty or unreachable
+# Fallback image if images directory is empty
 FALLBACK_IMAGE_URL = "https://images.unsplash.com/photo-1550751827-4bd374c3f58b?auto=format&fit=crop&w=1200&q=80"
 
 FEED_URLS = [
@@ -62,40 +58,30 @@ def match_keywords(text, keywords):
     text_lower = text.lower()
     return any(kw in text_lower for kw in keywords)
 
-def get_random_drive_image():
-    """Dynamically fetches a random image URL from the specified Google Drive folder."""
-    if not GDRIVE_FOLDER_ID or not GDRIVE_SERVICE_ACCOUNT_JSON:
-        logging.warning("Google Drive credentials or Folder ID missing. Using fallback image.")
+def get_random_local_image():
+    """Scans the local images/ directory and returns a raw GitHub URL for a random image."""
+    images_dir = "images"
+    
+    if not os.path.exists(images_dir):
+        logging.warning("Local 'images/' directory not found. Using fallback image.")
         return FALLBACK_IMAGE_URL
 
-    try:
-        sa_info = json.loads(GDRIVE_SERVICE_ACCOUNT_JSON)
-        creds = service_account.Credentials.from_service_account_info(
-            sa_info, scopes=["https://www.googleapis.com/auth/drive.readonly"]
-        )
-        service = build("drive", "v3", credentials=creds)
+    valid_extensions = (".jpg", ".jpeg", ".png", ".webp")
+    images = [f for f in os.listdir(images_dir) if f.lower().endswith(valid_extensions)]
 
-        # Broader query to catch any image type (jpeg, png, webp, etc.)
-        query = f"'{GDRIVE_FOLDER_ID}' in parents and mimeType contains 'image/' and trashed=false"
-        results = service.files().list(
-            q=query, pageSize=100, fields="files(id, name, mimeType)"
-        ).execute()
-        files = results.get("files", [])
-
-        if not files:
-            logging.warning("No images found in the specified Google Drive folder. Using fallback.")
-            return FALLBACK_IMAGE_URL
-
-        chosen_file = random.choice(files)
-        file_id = chosen_file["id"]
-        
-        direct_url = f"https://drive.google.com/uc?export=view&id={file_id}"
-        logging.info(f"Selected random image from Drive: {chosen_file['name']} ({direct_url})")
-        return direct_url
-
-    except Exception as e:
-        logging.error(f"Failed to fetch random image from Google Drive: {e}. Using fallback.")
+    if not images:
+        logging.warning("No images found in the 'images/' folder. Using fallback image.")
         return FALLBACK_IMAGE_URL
+
+    chosen_image = random.choice(images)
+    
+    # Get repo and branch from GitHub Actions env vars, with fallback defaults
+    repo = os.getenv("GITHUB_REPOSITORY", "potaterrr/rss-news")
+    branch = os.getenv("GITHUB_REF_NAME", "main")
+    
+    direct_url = f"https://raw.githubusercontent.com/{repo}/{branch}/images/{chosen_image}"
+    logging.info(f"Selected random local repo image: {chosen_image} ({direct_url})")
+    return direct_url
 
 def main():
     if not WEBHOOK_URL:
@@ -126,12 +112,12 @@ def main():
         except Exception as e:
             logging.error(f"Error parsing feed {url}: {e}")
 
-    # 2. Build digest, pick random image, and send payload to Make.com
+    # 2. Build digest, pick local random image, and send payload to Make.com
     if digest_items:
         logging.info(f"Found {len(digest_items)} new matching articles. Preparing payload...")
         
         combined_digest = "\n\n".join(digest_items)
-        random_banner = get_random_drive_image()
+        random_banner = get_random_local_image()
         
         payload_data = {
             "digest_title": f"Tech & AI Digest ({len(digest_items)} items)",
