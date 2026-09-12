@@ -3,6 +3,9 @@ import requests
 import os
 import json
 import logging
+import random
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
 # --- LOGGING CONFIGURATION ---
 logging.basicConfig(
@@ -16,6 +19,8 @@ logging.basicConfig(
 
 # --- CONFIGURATION ---
 WEBHOOK_URL = os.getenv("MAKE_WEBHOOK_URL")
+GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")
+GDRIVE_SERVICE_ACCOUNT_JSON = os.getenv("GDRIVE_SERVICE_ACCOUNT_JSON")
 
 FEED_URLS = [
     "https://news.ycombinator.com/rss",
@@ -54,6 +59,39 @@ def match_keywords(text, keywords):
     text_lower = text.lower()
     return any(kw in text_lower for kw in keywords)
 
+def get_random_drive_image():
+    """Dynamically fetches a random image URL from the specified Google Drive folder."""
+    if not GDRIVE_FOLDER_ID or not GDRIVE_SERVICE_ACCOUNT_JSON:
+        logging.warning("Google Drive credentials or Folder ID missing. Skipping image.")
+        return ""
+
+    try:
+        sa_info = json.loads(GDRIVE_SERVICE_ACCOUNT_JSON)
+        creds = service_account.Credentials.from_service_account_info(
+            sa_info, scopes=["https://www.googleapis.com/auth/drive.readonly"]
+        )
+        service = build("drive", "v3", credentials=creds)
+
+        query = f"'{GDRIVE_FOLDER_ID}' in parents and (mimeType='image/jpeg' or mimeType='image/png') and trashed=false"
+        results = service.files().list(
+            q=query, pageSize=100, fields="files(id, name)"
+        ).execute()
+        files = results.get("files", [])
+
+        if not files:
+            logging.warning("No images found in the specified Google Drive folder.")
+            return ""
+
+        chosen_file = random.choice(files)
+        file_id = chosen_file["id"]
+        direct_url = f"https://drive.google.com/uc?export=view&id={file_id}"
+        logging.info(f"Selected random image from Drive: {chosen_file['name']}")
+        return direct_url
+
+    except Exception as e:
+        logging.error(f"Failed to fetch random image from Google Drive: {e}")
+        return ""
+
 def main():
     if not WEBHOOK_URL:
         logging.error("MAKE_WEBHOOK_URL environment variable is not set!")
@@ -83,22 +121,24 @@ def main():
         except Exception as e:
             logging.error(f"Error parsing feed {url}: {e}")
 
-    # 2. Build a single consolidated text payload
+    # 2. Build digest, pick random image, and send payload to Make.com
     if digest_items:
-        logging.info(f"Found {len(digest_items)} new matching articles. Building single digest...")
+        logging.info(f"Found {len(digest_items)} new matching articles. Preparing payload...")
         
         combined_digest = "\n\n".join(digest_items)
+        random_banner = get_random_drive_image()
         
         payload_data = {
-            "digest_title": f"Tech & AI Digest ({len(digest_items)} new items)",
+            "digest_title": f"Tech & AI Digest ({len(digest_items)} items)",
             "total_items": len(digest_items),
-            "content": combined_digest
+            "content": combined_digest,
+            "banner_image": random_banner
         }
         
         try:
             response = requests.post(WEBHOOK_URL, json=payload_data, timeout=15)
             if response.status_code in [200, 201, 204]:
-                logging.info("Successfully delivered single digest payload to webhook.")
+                logging.info("Successfully delivered digest and image to Make.com.")
                 seen_articles.update(newly_seen_ids)
                 save_seen(seen_articles)
             else:
