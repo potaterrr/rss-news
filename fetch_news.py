@@ -18,9 +18,6 @@ logging.basicConfig(
 # --- CONFIGURATION ---
 WEBHOOK_URL = os.getenv("MAKE_WEBHOOK_URL")
 
-# Fallback image if images directory is empty
-FALLBACK_IMAGE_URL = "https://images.unsplash.com/photo-1550751827-4bd374c3f58b?auto=format&fit=crop&w=1200&q=80"
-
 FEED_URLS = [
     "https://news.ycombinator.com/rss",
     "https://www.phoronix.com/rss.php",
@@ -59,19 +56,17 @@ def match_keywords(text, keywords):
     return any(kw in text_lower for kw in keywords)
 
 def get_random_local_image():
-    """Scans the local images/ directory and returns a raw GitHub URL for a random image."""
+    """Scans the local images/ directory and returns a raw GitHub URL. Raises an error if none found."""
     images_dir = "images"
     
     if not os.path.exists(images_dir):
-        logging.warning("Local 'images/' directory not found. Using fallback image.")
-        return FALLBACK_IMAGE_URL
+        raise FileNotFoundError("Critical Error: Local 'images/' directory does not exist in the workspace!")
 
     valid_extensions = (".jpg", ".jpeg", ".png", ".webp")
     images = [f for f in os.listdir(images_dir) if f.lower().endswith(valid_extensions)]
 
     if not images:
-        logging.warning("No images found in the 'images/' folder. Using fallback image.")
-        return FALLBACK_IMAGE_URL
+        raise ValueError("Critical Error: The 'images/' folder contains no valid image files (.jpg, .png, .webp)!")
 
     chosen_image = random.choice(images)
     
@@ -117,7 +112,7 @@ def main():
         logging.info(f"Found {len(digest_items)} new matching articles. Preparing payload...")
         
         combined_digest = "\n\n".join(digest_items)
-        random_banner = get_random_local_image()
+        random_banner = get_random_local_image()  # Will throw an error if no images exist
         
         payload_data = {
             "digest_title": f"Tech & AI Digest ({len(digest_items)} items)",
