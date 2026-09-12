@@ -84,8 +84,10 @@ def get_random_drive_image():
 
         chosen_file = random.choice(files)
         file_id = chosen_file["id"]
+        
+        # Explicit download/view link format
         direct_url = f"https://drive.google.com/uc?export=view&id={file_id}"
-        logging.info(f"Selected random image from Drive: {chosen_file['name']}")
+        logging.info(f"Selected random image from Drive: {chosen_file['name']} ({direct_url})")
         return direct_url
 
     except Exception as e:
