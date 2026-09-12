@@ -22,6 +22,9 @@ WEBHOOK_URL = os.getenv("MAKE_WEBHOOK_URL")
 GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")
 GDRIVE_SERVICE_ACCOUNT_JSON = os.getenv("GDRIVE_SERVICE_ACCOUNT_JSON")
 
+# Fallback image if Drive folder is empty or unreachable
+FALLBACK_IMAGE_URL = "https://images.unsplash.com/photo-1550751827-4bd374c3f58b?auto=format&fit=crop&w=1200&q=80"
+
 FEED_URLS = [
     "https://news.ycombinator.com/rss",
     "https://www.phoronix.com/rss.php",
@@ -62,8 +65,8 @@ def match_keywords(text, keywords):
 def get_random_drive_image():
     """Dynamically fetches a random image URL from the specified Google Drive folder."""
     if not GDRIVE_FOLDER_ID or not GDRIVE_SERVICE_ACCOUNT_JSON:
-        logging.warning("Google Drive credentials or Folder ID missing. Skipping image.")
-        return ""
+        logging.warning("Google Drive credentials or Folder ID missing. Using fallback image.")
+        return FALLBACK_IMAGE_URL
 
     try:
         sa_info = json.loads(GDRIVE_SERVICE_ACCOUNT_JSON)
@@ -72,27 +75,27 @@ def get_random_drive_image():
         )
         service = build("drive", "v3", credentials=creds)
 
-        query = f"'{GDRIVE_FOLDER_ID}' in parents and (mimeType='image/jpeg' or mimeType='image/png') and trashed=false"
+        # Broader query to catch any image type (jpeg, png, webp, etc.)
+        query = f"'{GDRIVE_FOLDER_ID}' in parents and mimeType contains 'image/' and trashed=false"
         results = service.files().list(
-            q=query, pageSize=100, fields="files(id, name)"
+            q=query, pageSize=100, fields="files(id, name, mimeType)"
         ).execute()
         files = results.get("files", [])
 
         if not files:
-            logging.warning("No images found in the specified Google Drive folder.")
-            return ""
+            logging.warning("No images found in the specified Google Drive folder. Using fallback.")
+            return FALLBACK_IMAGE_URL
 
         chosen_file = random.choice(files)
         file_id = chosen_file["id"]
         
-        # Explicit download/view link format
         direct_url = f"https://drive.google.com/uc?export=view&id={file_id}"
         logging.info(f"Selected random image from Drive: {chosen_file['name']} ({direct_url})")
         return direct_url
 
     except Exception as e:
-        logging.error(f"Failed to fetch random image from Google Drive: {e}")
-        return ""
+        logging.error(f"Failed to fetch random image from Google Drive: {e}. Using fallback.")
+        return FALLBACK_IMAGE_URL
 
 def main():
     if not WEBHOOK_URL:
