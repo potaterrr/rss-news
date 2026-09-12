@@ -56,26 +56,27 @@ def match_keywords(text, keywords):
     return any(kw in text_lower for kw in keywords)
 
 def get_random_local_image():
-    """Scans the local images/ directory and returns a raw GitHub URL. Raises an error if none found."""
-    images_dir = "images"
+    """Scans the local images/ directory securely and returns a random raw GitHub image URL."""
+    images_dir = os.path.join(os.getcwd(), "images")
     
     if not os.path.exists(images_dir):
-        raise FileNotFoundError("Critical Error: Local 'images/' directory does not exist in the workspace!")
+        raise FileNotFoundError(f"Critical Error: 'images' directory not found at path: {images_dir}")
 
     valid_extensions = (".jpg", ".jpeg", ".png", ".webp")
     images = [f for f in os.listdir(images_dir) if f.lower().endswith(valid_extensions)]
 
+    logging.info(f"Found local images in repo: {images}")
+
     if not images:
-        raise ValueError("Critical Error: The 'images/' folder contains no valid image files (.jpg, .png, .webp)!")
+        raise ValueError(f"Critical Error: The 'images/' folder at {images_dir} contains no valid image files!")
 
     chosen_image = random.choice(images)
     
-    # Get repo and branch from GitHub Actions env vars, with fallback defaults
     repo = os.getenv("GITHUB_REPOSITORY", "potaterrr/rss-news")
     branch = os.getenv("GITHUB_REF_NAME", "main")
     
     direct_url = f"https://raw.githubusercontent.com/{repo}/{branch}/images/{chosen_image}"
-    logging.info(f"Selected random local repo image: {chosen_image} ({direct_url})")
+    logging.info(f"Randomly selected image: {chosen_image} -> URL: {direct_url}")
     return direct_url
 
 def main():
@@ -107,12 +108,12 @@ def main():
         except Exception as e:
             logging.error(f"Error parsing feed {url}: {e}")
 
-    # 2. Build digest, pick local random image, and send payload to Make.com
+    # 2. Build digest, pick a random local image, and send payload
     if digest_items:
         logging.info(f"Found {len(digest_items)} new matching articles. Preparing payload...")
         
         combined_digest = "\n\n".join(digest_items)
-        random_banner = get_random_local_image()  # Will throw an error if no images exist
+        random_banner = get_random_local_image()  # Will throw a clear error if no images are tracked
         
         payload_data = {
             "digest_title": f"Tech & AI Digest ({len(digest_items)} items)",
@@ -124,7 +125,7 @@ def main():
         try:
             response = requests.post(WEBHOOK_URL, json=payload_data, timeout=15)
             if response.status_code in [200, 201, 204]:
-                logging.info("Successfully delivered digest and image to Make.com.")
+                logging.info("Successfully delivered digest and random image to Make.com.")
                 seen_articles.update(newly_seen_ids)
                 save_seen(seen_articles)
             else:
