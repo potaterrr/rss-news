@@ -1,80 +1,112 @@
-import json
-import os
-import urllib.request
 import feedparser
+import requests
+import os
+import json
+import logging
 
-RSS_FEEDS = [
-    "https://rsshub.app/github/trending/daily",
-    "https://rsshub.app/github/trending/weekly",
-    "https://openai.com/news/rss.xml",
-    "https://deepmind.google/blog/rss.xml",
-    "https://blog.google/technology/ai/rss/",
-    "https://huggingface.co/blog/feed.xml",
-    "https://github.com/openclaw/openclaw/releases.atom",
-    "https://github.com/openai/codex/releases.atom",
-    "https://github.com/anthropics/claude-code/releases.atom",
-    "https://github.com/google-gemini/gemini-cli/releases.atom",
-    "https://blog.python.org/rss.xml"
+# --- LOGGING CONFIGURATION ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("rss_fetcher.log", encoding="utf-8"),
+        logging.StreamHandler()
+    ]
+)
+
+# --- CONFIGURATION ---
+WEBHOOK_URL = os.getenv("MAKE_WEBHOOK_URL")
+
+FEED_URLS = [
+    "https://news.ycombinator.com/rss",
+    "https://www.phoronix.com/rss.php",
+    "https://www.theverge.com/rss/index.xml",
+    "https://hnrss.org/ai",
+    "https://9to5google.com/feed/"
 ]
 
-MAKE_WEBHOOK_URL = os.environ.get("MAKE_WEBHOOK_URL")
+KEYWORDS = [
+    "linux", "ubuntu", "debian", "windows", 
+    "ai model", "llm", "openai", "deepseek", "anthropic", 
+    "smartphone", "pixel", "galaxy", "gpu"
+]
 
-def get_all_feeds_news():
-    if not MAKE_WEBHOOK_URL:
-        print("ERROR: MAKE_WEBHOOK_URL environment variable is missing!")
-        return []
+SEEN_FILE = "seen_articles.json"
 
-    all_news_items = []
+def load_seen():
+    if os.path.exists(SEEN_FILE):
+        try:
+            with open(SEEN_FILE, "r", encoding="utf-8") as f:
+                return set(json.load(f))
+        except Exception:
+            return set()
+    return set()
 
-    for url in RSS_FEEDS:
-        print(f"Checking feed: {url}")
+def save_seen(seen_set):
+    try:
+        seen_list = list(seen_set)[-1000:]
+        with open(SEEN_FILE, "w", encoding="utf-8") as f:
+            json.dump(seen_list, f)
+    except Exception as e:
+        logging.error(f"Failed to save seen cache: {e}")
+
+def match_keywords(text, keywords):
+    text_lower = text.lower()
+    return any(kw in text_lower for kw in keywords)
+
+def main():
+    if not WEBHOOK_URL:
+        logging.error("MAKE_WEBHOOK_URL environment variable is not set!")
+        return
+
+    logging.info("Starting RSS digest run...")
+    seen_articles = load_seen()
+    digest_items = []
+    newly_seen_ids = set()
+
+    # 1. Gather matching items
+    for url in FEED_URLS:
         try:
             feed = feedparser.parse(url)
-            if hasattr(feed, 'entries') and len(feed.entries) > 0:
-                entry = feed.entries[0]
-                title = entry.get("title", "No Title")
-                link = entry.get("link", "")
+            for entry in feed.entries:
+                entry_id = getattr(entry, "id", getattr(entry, "link", None))
+                if not entry_id or entry_id in seen_articles:
+                    continue
+                    
+                title = getattr(entry, "title", "No Title")
+                summary = getattr(entry, "summary", getattr(entry, "description", ""))
                 
-                if not link and "links" in entry and entry["links"]:
-                    link = entry["links"][0].get("href", "")
-                
-                summary = entry.get("summary", entry.get("content", [{"value": ""}])[0].get("value", ""))[:300]
-                
-                item = {
-                    "title": title,
-                    "link": link,
-                    "description": summary,
-                    "source": feed.feed.get("title", url)
-                }
-                all_news_items.append(item)
-                print(f"-> Grabbed item from: {item['source']} | {title}")
-            else:
-                print(f"-> Feed is empty or unrecognized: {url}")
+                if match_keywords(f"{title} {summary}", KEYWORDS):
+                    item_text = f"• **{title}**\n  Link: {entry.link}\n  Source: {feed.feed.get('title', url)}"
+                    digest_items.append(item_text)
+                    newly_seen_ids.add(entry_id)
         except Exception as e:
-            print(f"WARNING: Error parsing {url}: {e}")
-            continue
-            
-    return all_news_items
+            logging.error(f"Error parsing feed {url}: {e}")
 
-def send_to_make(data):
-    req = urllib.request.Request(
-        MAKE_WEBHOOK_URL,
-        data=json.dumps(data).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST"
-    )
-    
-    try:
-        with urllib.request.urlopen(req) as response:
-            print(f"Successfully sent payload to Make.com! Status: {response.status}")
-    except Exception as e:
-        print(f"ERROR: Failed to send payload to Make.com: {e}")
-        raise e
+    # 2. Build a single consolidated text payload
+    if digest_items:
+        logging.info(f"Found {len(digest_items)} new matching articles. Building single digest...")
+        
+        combined_digest = "\n\n".join(digest_items)
+        
+        payload_data = {
+            "digest_title": f"Tech & AI Digest ({len(digest_items)} new items)",
+            "total_items": len(digest_items),
+            "content": combined_digest
+        }
+        
+        try:
+            response = requests.post(WEBHOOK_URL, json=payload_data, timeout=15)
+            if response.status_code in [200, 201, 204]:
+                logging.info("Successfully delivered single digest payload to webhook.")
+                seen_articles.update(newly_seen_ids)
+                save_seen(seen_articles)
+            else:
+                logging.error(f"Webhook rejected payload. Status: {response.status_code}")
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Network error: {e}")
+    else:
+        logging.info("No new matching articles found.")
 
 if __name__ == "__main__":
-    news_items = get_all_feeds_news()
-    if news_items:
-        print(f"Sending {len(news_items)} items to Make.com...")
-        send_to_make(news_items)
-    else:
-        print("Exiting gracefully: No news items found across any of the feeds.")
+    main()
